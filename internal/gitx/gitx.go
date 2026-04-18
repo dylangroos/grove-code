@@ -155,6 +155,63 @@ func (r *Runner) DiffCommit(ctx context.Context, sha string) ([]byte, error) {
 	return r.run(ctx, "show", "--no-color", "--format=", sha)
 }
 
+// DiffWorktree returns the combined unified diff of tracked changes (vs HEAD)
+// and untracked files (as new-file diffs). The output is a single byte buffer
+// that go-gitdiff can parse in one pass.
+func (r *Runner) DiffWorktree(ctx context.Context) ([]byte, error) {
+	var buf bytes.Buffer
+	tracked, err := r.DiffHEAD(ctx)
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(tracked)
+
+	// List untracked files (respects .gitignore via --exclude-standard).
+	out, err := r.run(ctx, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return buf.Bytes(), nil // not fatal; return what we have
+	}
+	for _, path := range splitZ(string(out)) {
+		if path == "" {
+			continue
+		}
+		d, err := r.diffNoIndex(ctx, path)
+		if err != nil {
+			continue
+		}
+		buf.Write(d)
+	}
+	return buf.Bytes(), nil
+}
+
+// diffNoIndex produces a "new file" style diff for an untracked path by
+// diffing /dev/null against the file on disk.
+func (r *Runner) diffNoIndex(ctx context.Context, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-color", "--no-index", "--", "/dev/null", path)
+	if r.Dir != "" {
+		cmd.Dir = r.Dir
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	// git diff --no-index exits 1 when files differ. That's the success case here.
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 && stdout.Len() > 0 {
+			return stdout.Bytes(), nil
+		}
+		return nil, fmt.Errorf("git diff --no-index %s: %w: %s", path, err, strings.TrimSpace(stderr.String()))
+	}
+	return stdout.Bytes(), nil
+}
+
+func splitZ(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return strings.Split(strings.TrimRight(s, "\x00"), "\x00")
+}
+
 type Commit struct {
 	SHA     string
 	Short   string

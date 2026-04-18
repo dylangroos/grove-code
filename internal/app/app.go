@@ -164,10 +164,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.updateConfirmQuit(msg)
 	}
 
-	// Normal mode.
+	// Key routing. The rule: when the terminal pane is focused, every key
+	// except ctrl+g (leader) and ctrl+c (emergency) flows to the agent PTY.
 	if km, ok := msg.(tea.KeyPressMsg); ok {
-		if cmd := a.handleGlobalKey(km); cmd != nil || a.mode != modeNormal {
-			return a, cmd
+		switch km.String() {
+		case "ctrl+g":
+			a.toggleFocus()
+			return a, nil
+		case "ctrl+c":
+			return a, a.beginQuit()
+		}
+		terminalFocused := a.focus == focusActive && a.tab == tabTerm
+		if !terminalFocused {
+			if cmd := a.handleNormalKey(km); cmd != nil || a.mode != modeNormal {
+				return a, cmd
+			}
 		}
 	}
 
@@ -212,30 +223,23 @@ func updateTerm(t termpane.Model, msg tea.Msg) (termpane.Model, tea.Cmd) {
 	return *p2, cmd
 }
 
-func (a *App) handleGlobalKey(k tea.KeyPressMsg) tea.Cmd {
+// handleNormalKey processes bare-letter grove commands. Called only when the
+// terminal pane is NOT focused — otherwise keystrokes go to the agent PTY.
+func (a *App) handleNormalKey(k tea.KeyPressMsg) tea.Cmd {
 	switch k.String() {
-	case "ctrl+c", "q":
-		if len(a.reg.All()) == 0 {
-			return tea.Quit
-		}
-		a.mode = modeConfirmQuit
-		a.status = "quit? y/n  (will kill running agents)"
-		return nil
-	case "tab":
-		if a.focus == focusSessions {
-			a.focus = focusActive
-		} else {
-			a.focus = focusSessions
-		}
-		return nil
+	case "q":
+		return a.beginQuit()
 	case "1":
 		a.tab = tabTerm
+		a.focus = focusActive
 		return nil
 	case "2":
 		a.tab = tabDiff
+		a.focus = focusActive
 		return a.diff.Refresh()
 	case "3":
 		a.tab = tabLog
+		a.focus = focusActive
 		return a.log.Refresh()
 	case "n":
 		a.mode = modeNewBranch
@@ -264,6 +268,23 @@ func (a *App) handleGlobalKey(k tea.KeyPressMsg) tea.Cmd {
 	case "P":
 		return a.createPR()
 	}
+	return nil
+}
+
+func (a *App) toggleFocus() {
+	if a.focus == focusSessions {
+		a.focus = focusActive
+	} else {
+		a.focus = focusSessions
+	}
+}
+
+func (a *App) beginQuit() tea.Cmd {
+	if len(a.reg.All()) == 0 {
+		return tea.Quit
+	}
+	a.mode = modeConfirmQuit
+	a.status = "quit? y/n  (will kill running agents)"
 	return nil
 }
 
@@ -455,7 +476,7 @@ func (a *App) render() string {
 	tabs := a.renderTabs()
 	list := a.list.View()
 	body := a.renderBody()
-	hint := styleHint.Render("j/k pick  n new  x kill  tab focus  1/2/3 tab  P pr  q quit")
+	hint := styleHint.Render(a.hintText())
 	status := styleStatus.Render(a.status)
 
 	listW := 28
@@ -478,6 +499,17 @@ func (a *App) render() string {
 		bottom = styleStatus.Render("quit? y/n")
 	}
 	return header + "\n" + main + "\n" + bottom
+}
+
+func (a *App) hintText() string {
+	switch {
+	case a.focus == focusActive && a.tab == tabTerm:
+		return "[typing → agent]  ctrl+g → grove commands"
+	case a.focus == focusActive:
+		return "j/k scroll  1/2/3 tab  ctrl+g → sessions"
+	default:
+		return "j/k pick  n new  x kill  1/2/3 tab  P pr  q quit  ctrl+g → terminal"
+	}
 }
 
 func (a *App) renderTabs() string {

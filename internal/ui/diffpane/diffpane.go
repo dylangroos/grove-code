@@ -63,7 +63,7 @@ func (m *Model) Refresh() tea.Cmd {
 			return loadedMsg{content: "(no session selected)"}
 		}
 		g := gitx.New(root)
-		raw, err := g.DiffHEAD(context.Background())
+		raw, err := g.DiffWorktree(context.Background())
 		if err != nil {
 			return loadedMsg{err: err}
 		}

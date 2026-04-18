@@ -1,11 +1,14 @@
 package gitx
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/bluekeyes/go-gitdiff/gitdiff"
 )
 
 // setupRepo creates a temporary git repo with one commit.
@@ -91,6 +94,35 @@ func TestDiffHEADEmpty(t *testing.T) {
 	}
 	if len(d) != 0 {
 		t.Fatalf("want empty diff, got %q", d)
+	}
+}
+
+func TestDiffWorktreeIncludesUntracked(t *testing.T) {
+	dir := setupRepo(t)
+	// Add a new untracked file.
+	if err := os.WriteFile(filepath.Join(dir, "NEW.md"), []byte("# hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := New(dir)
+	d, err := g.DiffWorktree(context.Background())
+	if err != nil {
+		t.Fatalf("DiffWorktree: %v", err)
+	}
+	if len(d) == 0 {
+		t.Fatal("want non-empty diff for untracked file")
+	}
+	files, _, err := gitdiff.Parse(bytes.NewReader(d))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	foundNew := false
+	for _, f := range files {
+		if f.IsNew && (f.NewName == "NEW.md" || filepath.Base(f.NewName) == "NEW.md") {
+			foundNew = true
+		}
+	}
+	if !foundNew {
+		t.Fatalf("NEW.md not reported as new file; got: %+v", files)
 	}
 }
 
