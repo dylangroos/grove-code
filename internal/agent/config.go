@@ -23,6 +23,9 @@ type Defaults struct {
 	WorktreeRoot string `yaml:"worktree_root"`
 	BranchPrefix string `yaml:"branch_prefix"`
 	Shell        string `yaml:"shell"`
+	// Layout is "split" (terminal + diff side-by-side) or "tabbed"
+	// (single pane at a time). Toggle at runtime with `s`.
+	Layout string `yaml:"layout"`
 }
 
 type Agent struct {
@@ -75,6 +78,9 @@ func Load() (*File, error) {
 	}
 	if f.Defaults.WorktreeRoot == "" {
 		f.Defaults.WorktreeRoot = config.DataDir() + "/worktrees"
+	}
+	if f.Defaults.Layout == "" {
+		f.Defaults.Layout = "tabbed"
 	}
 	return &f, nil
 }
@@ -187,6 +193,7 @@ func defaultConfig() *File {
 		Defaults: Defaults{
 			BranchPrefix: "grove/",
 			WorktreeRoot: config.DataDir() + "/worktrees",
+			Layout:       "split",
 		},
 		Agents: []Agent{
 			{ID: "claude", Name: "Claude Code", Command: []string{"claude"}},

@@ -45,6 +45,13 @@ const (
 	modeConfirmQuit
 )
 
+type layout int
+
+const (
+	layoutTabbed layout = iota
+	layoutSplit
+)
+
 type App struct {
 	cfg      *agent.File
 	repoRoot string
@@ -63,9 +70,11 @@ type App struct {
 	tab    tab
 	focus  focus
 	mode   mode
+	layout layout
 
-	w, h   int
-	status string
+	w, h         int
+	termW, diffW int // derived by layout() in split mode
+	status       string
 }
 
 // New creates the root model. repoRoot must be a git repository.
@@ -85,6 +94,7 @@ func New(cfg *agent.File, repoRoot string, reg *session.Registry) *App {
 		tab:      tabTerm,
 		focus:    focusSessions,
 		mode:     modeNormal,
+		layout:   layoutFromConfig(cfg),
 	}
 	a.diff.SetRepoRoot(repoRoot)
 	a.log.SetRepoRoot(repoRoot)
@@ -94,6 +104,13 @@ func New(cfg *agent.File, repoRoot string, reg *session.Registry) *App {
 // SetProgram wires the Bubble Tea program so goroutines (e.g. pty readers)
 // can push messages into the Update loop.
 func (a *App) SetProgram(p *tea.Program) { a.prog = p }
+
+func layoutFromConfig(cfg *agent.File) layout {
+	if cfg != nil && cfg.Defaults.Layout == "split" {
+		return layoutSplit
+	}
+	return layoutTabbed
+}
 
 func (a *App) Init() tea.Cmd {
 	return tea.Batch(
@@ -118,11 +135,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = msg.Width, msg.Height
-		a.layout()
+		a.relayout()
 		return a, nil
 	case pollMsg:
-		cmds := []tea.Cmd{tea.Tick(2*time.Second, func(time.Time) tea.Msg { return pollMsg{} })}
-		if a.focus == focusActive {
+		cmds := []tea.Cmd{tea.Tick(time.Second, func(time.Time) tea.Msg { return pollMsg{} })}
+		// Split view keeps the diff live regardless of focus.
+		if a.layout == layoutSplit {
+			cmds = append(cmds, a.diff.Refresh())
+		} else if a.focus == focusActive {
 			switch a.tab {
 			case tabDiff:
 				cmds = append(cmds, a.diff.Refresh())
@@ -144,11 +164,13 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = a.reg.Save()
 		a.active = msg.s.ID
 		a.list.SetItems(a.reg.All())
+		a.diff.SetRepoRoot(msg.s.WorktreePath)
+		a.log.SetRepoRoot(msg.s.WorktreePath)
 		a.tab = tabTerm
 		a.focus = focusActive
-		a.layout()
+		a.relayout()
 		a.status = "session " + msg.s.ID + " started"
-		return a, msg.m.Init()
+		return a, tea.Batch(msg.m.Init(), a.diff.Refresh())
 	case termpane.ExitedMsg:
 		if s := a.reg.Get(msg.ID); s != nil {
 			s.Status = session.StatusExited
@@ -273,6 +295,9 @@ func (a *App) handleNormalKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 	case "P":
 		return a.createPR()
+	case "s":
+		a.toggleLayout()
+		return nil
 	}
 	return nil
 }
@@ -283,6 +308,15 @@ func (a *App) toggleFocus() {
 	} else {
 		a.focus = focusSessions
 	}
+}
+
+func (a *App) toggleLayout() {
+	if a.layout == layoutSplit {
+		a.layout = layoutTabbed
+	} else {
+		a.layout = layoutSplit
+	}
+	a.relayout()
 }
 
 func (a *App) beginQuit() tea.Cmd {
@@ -445,7 +479,7 @@ func (a *App) syncActive() {
 	a.log.SetRepoRoot(s.WorktreePath)
 }
 
-func (a *App) layout() {
+func (a *App) relayout() {
 	listW := 28
 	if a.w < 90 {
 		listW = a.w / 3
@@ -456,10 +490,26 @@ func (a *App) layout() {
 	}
 	rightW := a.w - listW - 1
 	a.list.SetSize(listW, bodyH)
-	a.diff.SetSize(rightW, bodyH)
 	a.log.SetSize(rightW, bodyH)
-	for _, t := range a.terms {
-		t.SetSize(rightW, bodyH)
+
+	if a.layout == layoutSplit && a.tab != tabLog {
+		// Terminal gets 55% of the right area, diff gets 45%, 1col gap.
+		a.termW = rightW * 55 / 100
+		a.diffW = rightW - a.termW - 1
+		if a.diffW < 20 {
+			a.diffW = 20
+			a.termW = rightW - a.diffW - 1
+		}
+		a.diff.SetSize(a.diffW, bodyH)
+		for _, t := range a.terms {
+			t.SetSize(a.termW, bodyH)
+		}
+	} else {
+		a.termW, a.diffW = rightW, rightW
+		a.diff.SetSize(rightW, bodyH)
+		for _, t := range a.terms {
+			t.SetSize(rightW, bodyH)
+		}
 	}
 }
 
@@ -514,13 +564,20 @@ func (a *App) render() string {
 }
 
 func (a *App) hintText() string {
+	split := a.layout == layoutSplit && a.tab != tabLog
 	switch {
 	case a.focus == focusActive && a.tab == tabTerm:
+		if split {
+			return "[typing → agent]  ctrl+g → grove  (split: agent | diff)"
+		}
 		return "[typing → agent]  ctrl+g → grove commands"
 	case a.focus == focusActive:
 		return "j/k scroll  1/2/3 tab  ctrl+g → sessions"
 	default:
-		return "j/k pick  n new  x kill  1/2/3 tab  P pr  q quit  ctrl+g → terminal"
+		if split {
+			return "j/k pick  n new  x kill  s tabbed  3 log  P pr  q quit  ctrl+g → terminal"
+		}
+		return "j/k pick  n new  x kill  s split  1/2/3 tab  P pr  q quit  ctrl+g → terminal"
 	}
 }
 
@@ -541,6 +598,9 @@ func (a *App) renderTabs() string {
 }
 
 func (a *App) renderBody() string {
+	if a.layout == layoutSplit && a.tab != tabLog {
+		return a.renderSplitBody()
+	}
 	switch a.tab {
 	case tabTerm:
 		if m := a.activeTerm(); m != nil {
@@ -553,4 +613,15 @@ func (a *App) renderBody() string {
 		return a.log.View()
 	}
 	return ""
+}
+
+func (a *App) renderSplitBody() string {
+	termView := styleHint.Render("(no session — press n)")
+	if m := a.activeTerm(); m != nil {
+		termView = m.View()
+	}
+	left := lipgloss.NewStyle().Width(a.termW).Render(termView)
+	right := lipgloss.NewStyle().Width(a.diffW).Render(a.diff.View())
+	gap := lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("│")
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right)
 }
