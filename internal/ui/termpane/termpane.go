@@ -196,10 +196,16 @@ func (h *handle) Close() error {
 
 // --- Bubble Tea Model ---
 
-// RefreshMsg is emitted by the periodic tick to trigger re-render when the
-// underlying terminal has new output. It carries the pane's id so the root
-// model can target the right session.
+// RefreshMsg is pushed by the pty reader (via Spec.OnDirty → Program.Send)
+// when new output has landed in the emulator. It triggers a re-render but
+// does NOT reschedule the keepalive tick — otherwise a burst of output
+// would accumulate ticks and degrade performance over time.
 type RefreshMsg struct {
+	ID string
+}
+
+// KeepAliveMsg is fired by the slow safety tick. Re-renders and reschedules.
+type KeepAliveMsg struct {
 	ID string
 }
 
@@ -230,7 +236,7 @@ func (m *Model) Init() tea.Cmd {
 // is ever dropped.
 func (m *Model) tick() tea.Cmd {
 	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
-		return RefreshMsg{ID: m.ID}
+		return KeepAliveMsg{ID: m.ID}
 	})
 }
 
@@ -261,6 +267,9 @@ func (m *Model) Handle() Handle { return m.h }
 func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case RefreshMsg:
+		// Push-driven — just trigger a re-render, do not reschedule the tick.
+		return m, nil
+	case KeepAliveMsg:
 		if msg.ID == m.ID {
 			return m, m.tick()
 		}

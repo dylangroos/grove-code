@@ -138,7 +138,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.relayout()
 		return a, nil
 	case pollMsg:
-		cmds := []tea.Cmd{tea.Tick(time.Second, func(time.Time) tea.Msg { return pollMsg{} })}
+		cmds := []tea.Cmd{tea.Tick(2*time.Second, func(time.Time) tea.Msg { return pollMsg{} })}
 		// Split view keeps the diff live regardless of focus.
 		if a.layout == layoutSplit {
 			cmds = append(cmds, a.diff.Refresh())
@@ -230,8 +230,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	// Forward refresh ticks to all term models so they keep polling.
-	if _, ok := msg.(termpane.RefreshMsg); ok {
+	// Forward pty refresh and keepalive ticks to all term models.
+	switch msg.(type) {
+	case termpane.RefreshMsg, termpane.KeepAliveMsg:
 		var cmds []tea.Cmd
 		for _, t := range a.terms {
 			var cmd tea.Cmd
@@ -535,7 +536,6 @@ func (a *App) render() string {
 		return "initializing…"
 	}
 	header := styleHeader.Render("grove-code") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
-	tabs := a.renderTabs()
 	list := a.list.View()
 	body := a.renderBody()
 	hint := styleHint.Render(a.hintText())
@@ -546,8 +546,19 @@ func (a *App) render() string {
 		listW = a.w / 3
 	}
 	rightW := a.w - listW - 1
+
+	// In split mode, show column headers instead of a tab bar (which is
+	// misleading when both Terminal and Diff are visible at once). The
+	// full-screen Log view still gets the standard tab bar.
+	var topRight string
+	if a.layout == layoutSplit && a.tab != tabLog {
+		topRight = a.renderSplitHeaders()
+	} else {
+		topRight = a.renderTabs()
+	}
+
 	listPane := lipgloss.NewStyle().Width(listW).Render(list)
-	rightPane := lipgloss.NewStyle().Width(rightW).Render(tabs + "\n" + body)
+	rightPane := lipgloss.NewStyle().Width(rightW).Render(topRight + "\n" + body)
 	main := lipgloss.JoinHorizontal(lipgloss.Top, listPane, rightPane)
 
 	bottom := hint
@@ -613,6 +624,14 @@ func (a *App) renderBody() string {
 		return a.log.View()
 	}
 	return ""
+}
+
+func (a *App) renderSplitHeaders() string {
+	label := lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
+	left := lipgloss.NewStyle().Width(a.termW).Render(label.Render("Terminal"))
+	right := lipgloss.NewStyle().Width(a.diffW).Render(label.Render("Diff"))
+	gap := " "
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right)
 }
 
 func (a *App) renderSplitBody() string {
