@@ -51,12 +51,12 @@ func (m *Model) SetSize(w, h int) {
 	m.diffVp.SetHeight(h)
 }
 
-type loadedMsg struct {
+type LoadedMsg struct {
 	commits []gitx.Commit
 	err     error
 }
 
-type diffLoadedMsg struct {
+type DiffLoadedMsg struct {
 	content string
 	err     error
 }
@@ -66,11 +66,11 @@ func (m *Model) Refresh() tea.Cmd {
 	root := m.repoRoot
 	return func() tea.Msg {
 		if root == "" {
-			return loadedMsg{}
+			return LoadedMsg{}
 		}
 		g := gitx.New(root)
 		cs, err := g.Log(context.Background(), "HEAD", 200)
-		return loadedMsg{commits: cs, err: err}
+		return LoadedMsg{commits: cs, err: err}
 	}
 }
 
@@ -80,13 +80,13 @@ func (m *Model) loadDiff(sha string) tea.Cmd {
 		g := gitx.New(root)
 		raw, err := g.DiffCommit(context.Background(), sha)
 		if err != nil {
-			return diffLoadedMsg{err: err}
+			return DiffLoadedMsg{err: err}
 		}
 		files, _, err := gitdiff.Parse(bytes.NewReader(raw))
 		if err != nil {
-			return diffLoadedMsg{err: err}
+			return DiffLoadedMsg{err: err}
 		}
-		return diffLoadedMsg{content: diffpane.Render(files)}
+		return DiffLoadedMsg{content: diffpane.Render(files)}
 	}
 }
 
@@ -94,14 +94,14 @@ func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case loadedMsg:
+	case LoadedMsg:
 		m.commits = msg.commits
 		m.err = msg.err
 		if len(m.commits) > 0 {
 			m.sel = 0
 			return m, m.loadDiff(m.commits[0].SHA)
 		}
-	case diffLoadedMsg:
+	case DiffLoadedMsg:
 		if msg.err != nil {
 			m.diffVp.SetContent("error: " + msg.err.Error())
 		} else {

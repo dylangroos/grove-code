@@ -50,7 +50,7 @@ func (m *Model) SetSize(w, h int) {
 	m.vp.SetHeight(h)
 }
 
-type loadedMsg struct {
+type LoadedMsg struct {
 	content string
 	err     error
 }
@@ -60,21 +60,21 @@ func (m *Model) Refresh() tea.Cmd {
 	root := m.repoRoot
 	return func() tea.Msg {
 		if root == "" {
-			return loadedMsg{content: "(no session selected)"}
+			return LoadedMsg{content: "(no session selected)"}
 		}
 		g := gitx.New(root)
 		raw, err := g.DiffWorktree(context.Background())
 		if err != nil {
-			return loadedMsg{err: err}
+			return LoadedMsg{err: err}
 		}
 		if len(raw) == 0 {
-			return loadedMsg{content: "(no uncommitted changes)"}
+			return LoadedMsg{content: "(no uncommitted changes)"}
 		}
 		files, _, err := gitdiff.Parse(bytes.NewReader(raw))
 		if err != nil {
-			return loadedMsg{err: err}
+			return LoadedMsg{err: err}
 		}
-		return loadedMsg{content: Render(files)}
+		return LoadedMsg{content: Render(files)}
 	}
 }
 
@@ -82,7 +82,7 @@ func (m Model) Init() tea.Cmd { return nil }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case loadedMsg:
+	case LoadedMsg:
 		m.err = msg.err
 		m.content = msg.content
 		m.vp.SetContent(m.content)

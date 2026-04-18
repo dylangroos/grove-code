@@ -171,6 +171,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.relayout()
 		a.status = "session " + msg.s.ID + " started"
 		return a, tea.Batch(msg.m.Init(), a.diff.Refresh())
+	case diffpane.LoadedMsg:
+		var cmd tea.Cmd
+		a.diff, cmd = a.diff.Update(msg)
+		return a, cmd
+	case logpane.LoadedMsg:
+		var cmd tea.Cmd
+		a.log, cmd = a.log.Update(msg)
+		return a, cmd
+	case logpane.DiffLoadedMsg:
+		var cmd tea.Cmd
+		a.log, cmd = a.log.Update(msg)
+		return a, cmd
 	case termpane.ExitedMsg:
 		if s := a.reg.Get(msg.ID); s != nil {
 			s.Status = session.StatusExited
