@@ -40,7 +40,8 @@ func run() error {
 		return err
 	}
 	m := app.New(cfg, repoRoot, reg)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithFPS(120))
+	m.SetProgram(p)
 	_, err = p.Run()
 	return err
 }

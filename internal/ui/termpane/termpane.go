@@ -28,6 +28,10 @@ type Spec struct {
 	Cwd     string
 	Cols    int
 	Rows    int
+	// OnDirty, if non-nil, is invoked (with ~2ms coalescing) whenever new
+	// bytes land in the emulator. Used to push re-renders to the TUI without
+	// polling.
+	OnDirty func()
 }
 
 // Handle is the transport-agnostic session handle. v0.1 = in-process; v0.2 can
@@ -68,11 +72,21 @@ func Start(ctx context.Context, spec Spec) (Handle, error) {
 	emu := vt.NewSafeEmulator(spec.Cols, spec.Rows)
 
 	h := &handle{
-		cmd:  cmd,
-		ptmx: ptmx,
-		emu:  emu,
-		done: make(chan struct{}),
+		cmd:   cmd,
+		ptmx:  ptmx,
+		emu:   emu,
+		done:  make(chan struct{}),
+		dirty: make(chan struct{}, 1),
 	}
+	// Notifier: coalesces dirty signals and invokes spec.OnDirty.
+	go func() {
+		for range h.dirty {
+			if spec.OnDirty != nil {
+				spec.OnDirty()
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
 	// Pipe child output → emulator.
 	go func() {
 		buf := make([]byte, 4096)
@@ -80,7 +94,10 @@ func Start(ctx context.Context, spec Spec) (Handle, error) {
 			n, err := ptmx.Read(buf)
 			if n > 0 {
 				_, _ = emu.Write(buf[:n])
-				h.markDirty()
+				select {
+				case h.dirty <- struct{}{}:
+				default:
+				}
 			}
 			if err != nil {
 				h.markDone(err)
@@ -110,27 +127,10 @@ type handle struct {
 	emu  *vt.SafeEmulator
 
 	mu      sync.Mutex
-	dirty   bool
 	exitErr error
 	done    chan struct{}
+	dirty   chan struct{}
 	closed  bool
-}
-
-func (h *handle) markDirty() {
-	h.mu.Lock()
-	h.dirty = true
-	h.mu.Unlock()
-}
-
-// TakeDirty returns true at most once per "run of dirtiness" since the last call.
-func (h *handle) TakeDirty() bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.dirty {
-		h.dirty = false
-		return true
-	}
-	return false
 }
 
 func (h *handle) markDone(err error) {
@@ -142,6 +142,7 @@ func (h *handle) markDone(err error) {
 	h.closed = true
 	h.exitErr = err
 	close(h.done)
+	close(h.dirty) // let the notifier goroutine exit
 }
 
 func (h *handle) PID() int {
@@ -156,7 +157,10 @@ func (h *handle) Resize(cols, rows int) error {
 		return err
 	}
 	h.emu.Resize(cols, rows)
-	h.markDirty()
+	select {
+	case h.dirty <- struct{}{}:
+	default:
+	}
 	return nil
 }
 
@@ -221,8 +225,11 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(m.tick(), m.waitExit())
 }
 
+// tick is a slow keepalive. The primary render path is push-based via
+// Spec.OnDirty → Program.Send; this tick is just a safety net in case a push
+// is ever dropped.
 func (m *Model) tick() tea.Cmd {
-	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg {
+	return tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg {
 		return RefreshMsg{ID: m.ID}
 	})
 }

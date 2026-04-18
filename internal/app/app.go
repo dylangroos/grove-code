@@ -49,6 +49,8 @@ type App struct {
 	cfg      *agent.File
 	repoRoot string
 
+	prog *tea.Program
+
 	reg      *session.Registry
 	terms    map[string]*termpane.Model // sessionID -> pane
 	active   string                     // sessionID
@@ -88,6 +90,10 @@ func New(cfg *agent.File, repoRoot string, reg *session.Registry) *App {
 	a.log.SetRepoRoot(repoRoot)
 	return a
 }
+
+// SetProgram wires the Bubble Tea program so goroutines (e.g. pty readers)
+// can push messages into the Update loop.
+func (a *App) SetProgram(p *tea.Program) { a.prog = p }
 
 func (a *App) Init() tea.Cmd {
 	return tea.Batch(
@@ -387,14 +393,20 @@ func (a *App) startSession(branchName string) tea.Cmd {
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
+		id := session.NewID()
+		prog := a.prog
 		h, err := termpane.Start(ctx, termpane.Spec{
 			Command: spec.Command, Env: spec.Env, Cwd: spec.Cwd,
 			Cols: 80, Rows: 24,
+			OnDirty: func() {
+				if prog != nil {
+					prog.Send(termpane.RefreshMsg{ID: id})
+				}
+			},
 		})
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
-		id := session.NewID()
 		m := termpane.NewModel(id, h)
 		s := &session.Session{
 			ID: id, AgentID: ag.ID, RepoRoot: repo, WorktreePath: wtPath,
