@@ -39,7 +39,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	m := app.New(cfg, repoRoot, reg)
+	m := app.New(cfg, repoRoot, reg, cwd)
 	p := tea.NewProgram(m, tea.WithFPS(120))
 	m.SetProgram(p)
 	_, err = p.Run()
