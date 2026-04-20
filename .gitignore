@@ -1,1 +1,9 @@
 bin/
+/grove
+
+# editors
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
