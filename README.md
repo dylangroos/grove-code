@@ -4,6 +4,8 @@ TUI agent / worktree / diff manager.
 
 ## Install
 
+Requires Go 1.25+.
+
 ```sh
 go install github.com/dylangroos/grove-code/cmd/grove@latest
 ```
