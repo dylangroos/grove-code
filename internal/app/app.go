@@ -53,8 +53,9 @@ const (
 )
 
 type App struct {
-	cfg      *agent.File
-	repoRoot string
+	cfg       *agent.File
+	repoRoot  string
+	launchCwd string // directory grove was launched from; used as the default attach target
 
 	prog *tea.Program
 
@@ -78,14 +79,17 @@ type App struct {
 }
 
 // New creates the root model. repoRoot must be a git repository.
-func New(cfg *agent.File, repoRoot string, reg *session.Registry) *App {
+// launchCwd is the directory grove was launched from — used as the default
+// attach target when the user empty-submits with no session selected.
+func New(cfg *agent.File, repoRoot string, reg *session.Registry, launchCwd string) *App {
 	ti := textinput.New()
-	ti.Prompt = "branch name> "
-	ti.Placeholder = "feature-xyz"
+	ti.Prompt = "branch> "
+	ti.Placeholder = "feature-xyz  (empty = attach agent to current worktree)"
 	a := &App{
-		cfg:      cfg,
-		repoRoot: repoRoot,
-		reg:      reg,
+		cfg:       cfg,
+		repoRoot:  repoRoot,
+		launchCwd: launchCwd,
+		reg:       reg,
 		terms:    map[string]*termpane.Model{},
 		list:     sessionlist.New(),
 		diff:     diffpane.New(),
@@ -373,7 +377,12 @@ func (a *App) updateNewBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.mode = modeNormal
 			a.input.Blur()
 			if v == "" {
-				return a, nil
+				wt, branch, err := a.attachTarget()
+				if err != nil {
+					a.status = err.Error()
+					return a, nil
+				}
+				return a, a.attachAgent(wt, branch)
 			}
 			return a, a.startSession(v)
 		}
@@ -436,6 +445,70 @@ func (a *App) startSession(branchName string) tea.Cmd {
 		if err := g.WorktreeAdd(ctx, wtPath, branch, ""); err != nil {
 			return sessionCreatedMsg{err: fmt.Errorf("worktree add: %w", err)}
 		}
+		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		id := session.NewID()
+		prog := a.prog
+		h, err := termpane.Start(ctx, termpane.Spec{
+			Command: spec.Command, Env: spec.Env, Cwd: spec.Cwd,
+			Cols: 80, Rows: 24,
+			OnDirty: func() {
+				if prog != nil {
+					prog.Send(termpane.RefreshMsg{ID: id})
+				}
+			},
+		})
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		m := termpane.NewModel(id, h)
+		s := &session.Session{
+			ID: id, AgentID: ag.ID, RepoRoot: repo, WorktreePath: wtPath,
+			Branch: branch, PID: h.PID(), Status: session.StatusRunning,
+			StartedAt: time.Now(), LastActivity: time.Now(),
+		}
+		return sessionCreatedMsg{s: s, m: m}
+	}
+}
+
+// attachTarget resolves which (worktree, branch) an empty-submit should attach
+// to: the currently-highlighted session if one is selected, else the worktree
+// grove was launched from.
+func (a *App) attachTarget() (wtPath, branch string, err error) {
+	if s := a.currentSession(); s != nil {
+		return s.WorktreePath, s.Branch, nil
+	}
+	// No session selected — fall back to the launch cwd's worktree.
+	if a.launchCwd == "" {
+		return "", "", fmt.Errorf("no worktree to attach to — enter a branch name to create one")
+	}
+	ctx := context.Background()
+	g := gitx.New(a.launchCwd)
+	wt, err := g.RepoRoot(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("can't resolve current worktree: %w", err)
+	}
+	br, err := g.CurrentBranch(ctx)
+	if err != nil {
+		return "", "", fmt.Errorf("can't read current branch: %w", err)
+	}
+	return wt, br, nil
+}
+
+// attachAgent spawns a new agent session inside an *existing* worktree at
+// wtPath (current branch = branch). No `git worktree add` is performed.
+// Multiple sessions sharing one worktree see the same files; race protection
+// is the user's problem.
+func (a *App) attachAgent(wtPath, branch string) tea.Cmd {
+	if len(a.cfg.Agents) == 0 {
+		return func() tea.Msg { return sessionCreatedMsg{err: fmt.Errorf("no agents configured")} }
+	}
+	ag := a.cfg.Agents[0]
+	repo := a.repoRoot
+	return func() tea.Msg {
+		ctx := context.Background()
 		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
 		if err != nil {
 			return sessionCreatedMsg{err: err}
