@@ -1,4 +1,4 @@
-// Package config resolves XDG paths and loads/saves grove-code config + state.
+// Package config resolves XDG paths and loads/saves grove config + state.
 package config
 
 import (
@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 )
 
-const appName = "grove-code"
+const appName = "grove"
 
 func xdg(envKey, fallback string) string {
 	if v := os.Getenv(envKey); v != "" {
