@@ -80,8 +80,8 @@ type App struct {
 // New creates the root model. repoRoot must be a git repository.
 func New(cfg *agent.File, repoRoot string, reg *session.Registry) *App {
 	ti := textinput.New()
-	ti.Prompt = "branch name> "
-	ti.Placeholder = "feature-xyz"
+	ti.Prompt = "branch> "
+	ti.Placeholder = "feature-xyz  (empty = attach agent to current worktree)"
 	a := &App{
 		cfg:      cfg,
 		repoRoot: repoRoot,
@@ -373,7 +373,12 @@ func (a *App) updateNewBranch(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.mode = modeNormal
 			a.input.Blur()
 			if v == "" {
-				return a, nil
+				target := a.currentSession()
+				if target == nil {
+					a.status = "no worktree to attach to — enter a branch name to create one"
+					return a, nil
+				}
+				return a, a.attachAgent(target)
 			}
 			return a, a.startSession(v)
 		}
@@ -436,6 +441,48 @@ func (a *App) startSession(branchName string) tea.Cmd {
 		if err := g.WorktreeAdd(ctx, wtPath, branch, ""); err != nil {
 			return sessionCreatedMsg{err: fmt.Errorf("worktree add: %w", err)}
 		}
+		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		id := session.NewID()
+		prog := a.prog
+		h, err := termpane.Start(ctx, termpane.Spec{
+			Command: spec.Command, Env: spec.Env, Cwd: spec.Cwd,
+			Cols: 80, Rows: 24,
+			OnDirty: func() {
+				if prog != nil {
+					prog.Send(termpane.RefreshMsg{ID: id})
+				}
+			},
+		})
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		m := termpane.NewModel(id, h)
+		s := &session.Session{
+			ID: id, AgentID: ag.ID, RepoRoot: repo, WorktreePath: wtPath,
+			Branch: branch, PID: h.PID(), Status: session.StatusRunning,
+			StartedAt: time.Now(), LastActivity: time.Now(),
+		}
+		return sessionCreatedMsg{s: s, m: m}
+	}
+}
+
+// attachAgent spawns a new agent session inside an *existing* worktree
+// (target.WorktreePath / target.Branch). No `git worktree add` is performed.
+// Multiple sessions sharing one worktree see the same files; race protection
+// is the user's problem.
+func (a *App) attachAgent(target *session.Session) tea.Cmd {
+	if len(a.cfg.Agents) == 0 {
+		return func() tea.Msg { return sessionCreatedMsg{err: fmt.Errorf("no agents configured")} }
+	}
+	ag := a.cfg.Agents[0]
+	wtPath := target.WorktreePath
+	branch := target.Branch
+	repo := a.repoRoot
+	return func() tea.Msg {
+		ctx := context.Background()
 		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
 		if err != nil {
 			return sessionCreatedMsg{err: err}

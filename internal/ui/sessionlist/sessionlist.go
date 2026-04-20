@@ -3,6 +3,7 @@ package sessionlist
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"charm.land/lipgloss/v2"
@@ -27,9 +28,20 @@ type Model struct {
 func New() Model { return Model{} }
 
 func (m *Model) SetItems(items []*session.Session) {
-	m.items = items
-	if m.sel >= len(items) {
-		m.sel = len(items) - 1
+	// Group by worktree path (siblings cluster); chronological within a group.
+	// `Registry.All()` ranges over a map so input order is non-deterministic;
+	// sorting here gives a stable, grouped view.
+	sorted := make([]*session.Session, len(items))
+	copy(sorted, items)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		if sorted[i].WorktreePath != sorted[j].WorktreePath {
+			return sorted[i].WorktreePath < sorted[j].WorktreePath
+		}
+		return sorted[i].StartedAt.Before(sorted[j].StartedAt)
+	})
+	m.items = sorted
+	if m.sel >= len(sorted) {
+		m.sel = len(sorted) - 1
 	}
 	if m.sel < 0 {
 		m.sel = 0
@@ -66,10 +78,21 @@ func (m Model) View() string {
 		b.WriteString("\n")
 	}
 	for i, s := range m.items {
-		line := fmt.Sprintf(" %s %s  %s",
-			status(s),
-			styleAgent.Render(truncate(s.AgentID, 8)),
-			styleBranch.Render(truncate(s.Branch, m.w-14)))
+		// If this session shares a worktree with the one above, render it as
+		// a sibling under the same branch (tree-char prefix, dim branch label).
+		sibling := i > 0 && m.items[i-1].WorktreePath == s.WorktreePath
+		var line string
+		if sibling {
+			line = fmt.Sprintf(" %s%s  %s",
+				styleDim.Render("└─ "),
+				status(s),
+				styleDim.Render(truncate(s.AgentID, 8)))
+		} else {
+			line = fmt.Sprintf(" %s %s  %s",
+				status(s),
+				styleAgent.Render(truncate(s.AgentID, 8)),
+				styleBranch.Render(truncate(s.Branch, m.w-14)))
+		}
 		if i == m.sel {
 			line = styleSel.Render(pad(line, m.w-1))
 		}
