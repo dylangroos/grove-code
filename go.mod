@@ -1,4 +1,4 @@
-module github.com/dgroos/grove-code
+module github.com/dylangroos/grove-code
 
 go 1.25.0
 

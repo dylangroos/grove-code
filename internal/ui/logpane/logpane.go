@@ -13,8 +13,8 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
-	"github.com/dgroos/grove-code/internal/gitx"
-	"github.com/dgroos/grove-code/internal/ui/diffpane"
+	"github.com/dylangroos/grove-code/internal/gitx"
+	"github.com/dylangroos/grove-code/internal/ui/diffpane"
 )
 
 var (

@@ -12,14 +12,14 @@ import (
 	"charm.land/bubbles/v2/textinput"
 	"charm.land/lipgloss/v2"
 
-	"github.com/dgroos/grove-code/internal/agent"
-	"github.com/dgroos/grove-code/internal/gh"
-	"github.com/dgroos/grove-code/internal/gitx"
-	"github.com/dgroos/grove-code/internal/session"
-	"github.com/dgroos/grove-code/internal/ui/diffpane"
-	"github.com/dgroos/grove-code/internal/ui/logpane"
-	"github.com/dgroos/grove-code/internal/ui/sessionlist"
-	"github.com/dgroos/grove-code/internal/ui/termpane"
+	"github.com/dylangroos/grove-code/internal/agent"
+	"github.com/dylangroos/grove-code/internal/gh"
+	"github.com/dylangroos/grove-code/internal/gitx"
+	"github.com/dylangroos/grove-code/internal/session"
+	"github.com/dylangroos/grove-code/internal/ui/diffpane"
+	"github.com/dylangroos/grove-code/internal/ui/logpane"
+	"github.com/dylangroos/grove-code/internal/ui/sessionlist"
+	"github.com/dylangroos/grove-code/internal/ui/termpane"
 )
 
 type tab int
@@ -547,7 +547,7 @@ func (a *App) render() string {
 	if a.w == 0 {
 		return "initializing…"
 	}
-	header := styleHeader.Render("grove-code") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
+	header := styleHeader.Render("grove") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
 	list := a.list.View()
 	body := a.renderBody()
 	hint := styleHint.Render(a.hintText())

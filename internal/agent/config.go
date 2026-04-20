@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/dgroos/grove-code/internal/config"
+	"github.com/dylangroos/grove-code/internal/config"
 	"gopkg.in/yaml.v3"
 )
 

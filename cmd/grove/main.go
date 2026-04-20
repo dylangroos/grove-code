@@ -1,4 +1,4 @@
-// grove-code: TUI agent/worktree/diff manager.
+// grove: TUI agent/worktree/diff manager.
 package main
 
 import (
@@ -8,15 +8,15 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/dgroos/grove-code/internal/agent"
-	"github.com/dgroos/grove-code/internal/app"
-	"github.com/dgroos/grove-code/internal/gitx"
-	"github.com/dgroos/grove-code/internal/session"
+	"github.com/dylangroos/grove-code/internal/agent"
+	"github.com/dylangroos/grove-code/internal/app"
+	"github.com/dylangroos/grove-code/internal/gitx"
+	"github.com/dylangroos/grove-code/internal/session"
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "grove-code:", err)
+		fmt.Fprintln(os.Stderr, "grove:", err)
 		os.Exit(1)
 	}
 }
