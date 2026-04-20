@@ -27,7 +27,7 @@ func run() error {
 		return err
 	}
 	g := gitx.New(cwd)
-	repoRoot, err := g.RepoRoot(context.Background())
+	repoRoot, err := g.CommonRoot(context.Background())
 	if err != nil {
 		return fmt.Errorf("not a git repo (run from inside a git checkout): %w", err)
 	}

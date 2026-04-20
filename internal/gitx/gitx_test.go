@@ -85,6 +85,32 @@ func TestWorktreeLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommonRootSameFromLinkedWorktree(t *testing.T) {
+	dir := setupRepo(t)
+	primary := New(dir)
+	ctx := context.Background()
+
+	// Resolve canonical root from primary checkout, then add a linked worktree
+	// and resolve from there. Both must return the same path.
+	primaryRoot, err := primary.CommonRoot(ctx)
+	if err != nil {
+		t.Fatalf("CommonRoot from primary: %v", err)
+	}
+	wt := filepath.Join(t.TempDir(), "linked")
+	if err := primary.WorktreeAdd(ctx, wt, "linked-branch", ""); err != nil {
+		t.Fatalf("WorktreeAdd: %v", err)
+	}
+	t.Cleanup(func() { _ = primary.WorktreeRemove(ctx, wt, true) })
+
+	linkedRoot, err := New(wt).CommonRoot(ctx)
+	if err != nil {
+		t.Fatalf("CommonRoot from linked worktree: %v", err)
+	}
+	if primaryRoot != linkedRoot {
+		t.Fatalf("CommonRoot diverges: primary=%q linked=%q", primaryRoot, linkedRoot)
+	}
+}
+
 func TestDiffHEADEmpty(t *testing.T) {
 	dir := setupRepo(t)
 	g := New(dir)

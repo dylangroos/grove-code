@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -34,6 +35,18 @@ func (r *Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 func (r *Runner) RepoRoot(ctx context.Context) (string, error) {
 	out, err := r.run(ctx, "rev-parse", "--show-toplevel")
 	return strings.TrimSpace(string(out)), err
+}
+
+// CommonRoot returns the primary worktree root — the same value regardless of
+// which linked worktree the runner is standing in. Use this to key state
+// (session registry, worktree path bucket) that should be shared across all
+// worktrees of the same repo.
+func (r *Runner) CommonRoot(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Dir(strings.TrimSpace(string(out))), nil
 }
 
 func (r *Runner) CurrentBranch(ctx context.Context) (string, error) {
