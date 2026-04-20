@@ -49,34 +49,37 @@ type Worktree struct {
 }
 
 func (r *Runner) WorktreeList(ctx context.Context) ([]Worktree, error) {
-	out, err := r.run(ctx, "worktree", "list", "--porcelain", "-z")
+	// `-z` was added for `worktree list` in git 2.36; we parse the
+	// newline-separated form so older gits work too.
+	out, err := r.run(ctx, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
 	var wts []Worktree
 	var cur Worktree
-	for _, rec := range strings.Split(string(out), "\x00\x00") {
-		rec = strings.Trim(rec, "\x00")
-		if rec == "" {
-			continue
-		}
-		cur = Worktree{}
-		for _, line := range strings.Split(rec, "\x00") {
-			switch {
-			case strings.HasPrefix(line, "worktree "):
-				cur.Path = strings.TrimPrefix(line, "worktree ")
-			case strings.HasPrefix(line, "HEAD "):
-				cur.Head = strings.TrimPrefix(line, "HEAD ")
-			case strings.HasPrefix(line, "branch "):
-				cur.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
-			case line == "bare":
-				cur.Bare = true
-			}
-		}
+	flush := func() {
 		if cur.Path != "" {
 			wts = append(wts, cur)
 		}
+		cur = Worktree{}
 	}
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if line == "" {
+			flush()
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			cur.Path = strings.TrimPrefix(line, "worktree ")
+		case strings.HasPrefix(line, "HEAD "):
+			cur.Head = strings.TrimPrefix(line, "HEAD ")
+		case strings.HasPrefix(line, "branch "):
+			cur.Branch = strings.TrimPrefix(strings.TrimPrefix(line, "branch "), "refs/heads/")
+		case line == "bare":
+			cur.Bare = true
+		}
+	}
+	flush()
 	return wts, nil
 }
 
