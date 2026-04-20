@@ -1,6 +1,6 @@
 module github.com/dylangroos/grove-code
 
-go 1.25.0
+go 1.25
 
 require (
 	charm.land/bubbles/v2 v2.1.0 // indirect
