@@ -547,7 +547,7 @@ func (a *App) render() string {
 	if a.w == 0 {
 		return "initializing…"
 	}
-	header := styleHeader.Render("grove-code") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
+	header := styleHeader.Render("grove") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
 	list := a.list.View()
 	body := a.renderBody()
 	hint := styleHint.Render(a.hintText())
