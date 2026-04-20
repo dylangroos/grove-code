@@ -17,7 +17,7 @@ import (
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/bluekeyes/go-gitdiff/gitdiff"
-	"github.com/dgroos/grove-code/internal/gitx"
+	"github.com/dylangroos/grove-code/internal/gitx"
 )
 
 var (

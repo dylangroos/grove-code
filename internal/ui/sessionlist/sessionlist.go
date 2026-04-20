@@ -7,7 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/dgroos/grove-code/internal/session"
+	"github.com/dylangroos/grove-code/internal/session"
 )
 
 var (

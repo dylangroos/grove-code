@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dgroos/grove-code/internal/config"
+	"github.com/dylangroos/grove-code/internal/config"
 )
 
 type Status string
