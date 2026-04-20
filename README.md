@@ -8,9 +8,8 @@ Requires Go 1.25+.
 
 ```sh
 go install github.com/dylangroos/grove-code/cmd/grove@latest
+export PATH=$(go env GOPATH)/bin:$PATH   # one-time; add to ~/.bashrc (or ~/.zshrc) to persist
 ```
-
-This drops a `grove` binary in `$(go env GOPATH)/bin`. Make sure that's on your `PATH`.
 
 ## Run
 
