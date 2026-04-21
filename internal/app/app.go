@@ -102,6 +102,14 @@ func New(cfg *agent.File, repoRoot string, reg *session.Registry, launchCwd stri
 	}
 	a.diff.SetRepoRoot(repoRoot)
 	a.log.SetRepoRoot(repoRoot)
+	// Surface persisted sessions in the left pane immediately; they start as
+	// exited (no PTY) and the user resumes them via enter/click.
+	a.list.SetItems(a.reg.All())
+	if s := a.list.Selected(); s != nil {
+		a.active = s.ID
+		a.diff.SetRepoRoot(s.WorktreePath)
+		a.log.SetRepoRoot(s.WorktreePath)
+	}
 	return a
 }
 
@@ -208,6 +216,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.updateConfirmQuit(msg)
 	}
 
+	// Mouse clicks and wheel events route by cursor position — not focus —
+	// so scrolling and clicking always reach the pane under the cursor.
+	if cmd, handled := a.routeMouse(msg); handled {
+		return a, cmd
+	}
+
 	// Key routing. The rule: when the terminal pane is focused, every key
 	// except ctrl+g (leader) and ctrl+c (emergency) flows to the agent PTY.
 	if km, ok := msg.(tea.KeyPressMsg); ok {
@@ -307,6 +321,9 @@ func (a *App) handleNormalKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 	case "enter":
 		if a.focus == focusSessions {
+			if s := a.list.Selected(); s != nil && (s.Status != session.StatusRunning || a.terms[s.ID] == nil) {
+				return a.resumeSession(s)
+			}
 			a.focus = focusActive
 			return nil
 		}
@@ -319,12 +336,177 @@ func (a *App) handleNormalKey(k tea.KeyPressMsg) tea.Cmd {
 	return nil
 }
 
+// sessionsW returns the width of the left sessions column.
+func (a *App) sessionsW() int {
+	if a.w < 90 {
+		return a.w / 3
+	}
+	return 28
+}
+
+// focusPrefix returns the selection-arrow prefix for focused panes, or
+// matched-width spacing otherwise.
+func focusPrefix(focused bool) string {
+	if focused {
+		return "▸ "
+	}
+	return "  "
+}
+
+// hitPane identifies which pane a screen coordinate falls on.
+type hitPane int
+
+const (
+	hitNone hitPane = iota
+	hitList
+	hitTerm
+	hitDiff
+	hitLog
+)
+
+// hitTest maps a global (x,y) to a pane and that pane's origin in global
+// coords. The caller subtracts the origin to get pane-local coordinates.
+func (a *App) hitTest(x, y int) (hitPane, int, int) {
+	if a.w == 0 || a.h == 0 {
+		return hitNone, 0, 0
+	}
+	if y < 1 || y >= a.h-1 || x < 0 || x >= a.w {
+		return hitNone, 0, 0
+	}
+	listW := a.sessionsW()
+	// Left column: sessions list starts at y=1 (row 0 of main).
+	if x < listW {
+		return hitList, 0, 1
+	}
+	// Right column: body starts at y=2 (skipping the tab/split-header row).
+	if y < 2 {
+		return hitNone, 0, 0
+	}
+	if a.layout == layoutSplit && a.tab != tabLog {
+		termEndX := listW + a.termW
+		if x < termEndX {
+			return hitTerm, listW, 2
+		}
+		if x == termEndX {
+			return hitNone, 0, 0 // gap column
+		}
+		return hitDiff, termEndX + 1, 2
+	}
+	switch a.tab {
+	case tabTerm:
+		return hitTerm, listW, 2
+	case tabDiff:
+		return hitDiff, listW, 2
+	case tabLog:
+		return hitLog, listW, 2
+	}
+	return hitNone, 0, 0
+}
+
+// translateMouse returns a copy of msg with its coordinates shifted so that
+// (originX, originY) becomes the pane-local origin.
+func translateMouse(msg tea.Msg, originX, originY int) tea.Msg {
+	switch m := msg.(type) {
+	case tea.MouseClickMsg:
+		m.X -= originX
+		m.Y -= originY
+		return m
+	case tea.MouseReleaseMsg:
+		m.X -= originX
+		m.Y -= originY
+		return m
+	case tea.MouseWheelMsg:
+		m.X -= originX
+		m.Y -= originY
+		return m
+	case tea.MouseMotionMsg:
+		m.X -= originX
+		m.Y -= originY
+		return m
+	}
+	return msg
+}
+
+// routeMouse dispatches mouse click and wheel events by cursor position.
+// Returns handled=true when the event was consumed, so the caller should not
+// fall through to focus-based routing.
+func (a *App) routeMouse(msg tea.Msg) (tea.Cmd, bool) {
+	var mouse tea.Mouse
+	isClick := false
+	switch m := msg.(type) {
+	case tea.MouseClickMsg:
+		mouse = m.Mouse()
+		isClick = true
+	case tea.MouseWheelMsg:
+		mouse = m.Mouse()
+	default:
+		return nil, false
+	}
+
+	target, ox, oy := a.hitTest(mouse.X, mouse.Y)
+	local := translateMouse(msg, ox, oy)
+	switch target {
+	case hitList:
+		if isClick {
+			a.focus = focusSessions
+		}
+		var changed bool
+		a.list, _, changed = a.list.Update(local)
+		if changed {
+			a.syncActive()
+		}
+		return nil, true
+	case hitDiff:
+		if isClick {
+			a.focus = focusActive
+			a.tab = tabDiff
+		}
+		var cmd tea.Cmd
+		a.diff, cmd = a.diff.Update(local)
+		return cmd, true
+	case hitTerm:
+		// First click focuses the terminal; don't forward the phantom click
+		// to the PTY. Subsequent clicks (while focused) go through.
+		if isClick && (a.focus != focusActive || a.tab != tabTerm) {
+			a.focus = focusActive
+			a.tab = tabTerm
+			return nil, true
+		}
+		return a.forwardToTerm(local), true
+	case hitLog:
+		if isClick {
+			a.focus = focusActive
+			a.tab = tabLog
+			return nil, true
+		}
+		var cmd tea.Cmd
+		a.log, cmd = a.log.Update(local)
+		return cmd, true
+	}
+	return nil, true
+}
+
 func (a *App) toggleFocus() {
 	if a.focus == focusSessions {
 		a.focus = focusActive
 	} else {
 		a.focus = focusSessions
 	}
+}
+
+// forwardToTerm delivers a pane-local mouse event to the active terminal, if
+// one is focused and running.
+func (a *App) forwardToTerm(local tea.Msg) tea.Cmd {
+	if a.focus != focusActive || a.tab != tabTerm {
+		return nil
+	}
+	m := a.activeTerm()
+	if m == nil {
+		return nil
+	}
+	var cmd tea.Cmd
+	*m, cmd = updateTerm(*m, local)
+	return cmd
 }
 
 func (a *App) toggleLayout() {
@@ -430,6 +612,38 @@ func (a *App) killAll() {
 	}
 }
 
+// findAgent returns the configured agent whose ID matches id.
+func (a *App) findAgent(id string) (agent.Agent, bool) {
+	for _, ag := range a.cfg.Agents {
+		if ag.ID == id {
+			return ag, true
+		}
+	}
+	return agent.Agent{}, false
+}
+
+// buildSpec resolves the agent to a termpane Spec and injects claude's
+// --session-id (for a fresh conversation) or --resume (for a resume) when
+// agentSessionID is provided. Other agents get their command untouched.
+func (a *App) buildSpec(ag agent.Agent, wtPath, branch, agentSessionID string, resume bool) (termpane.Spec, error) {
+	spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: a.repoRoot})
+	if err != nil {
+		return termpane.Spec{}, err
+	}
+	cmd := append([]string(nil), spec.Command...)
+	if ag.ID == "claude" && agentSessionID != "" {
+		if resume {
+			cmd = append(cmd, "--resume", agentSessionID)
+		} else {
+			cmd = append(cmd, "--session-id", agentSessionID)
+		}
+	}
+	return termpane.Spec{
+		Command: cmd, Env: spec.Env, Cwd: spec.Cwd,
+		Cols: 80, Rows: 24,
+	}, nil
+}
+
 func (a *App) startSession(branchName string) tea.Cmd {
 	if len(a.cfg.Agents) == 0 {
 		return func() tea.Msg { return sessionCreatedMsg{err: fmt.Errorf("no agents configured")} }
@@ -445,27 +659,29 @@ func (a *App) startSession(branchName string) tea.Cmd {
 		if err := g.WorktreeAdd(ctx, wtPath, branch, ""); err != nil {
 			return sessionCreatedMsg{err: fmt.Errorf("worktree add: %w", err)}
 		}
-		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
+		agentSessionID := ""
+		if ag.ID == "claude" {
+			agentSessionID = session.NewAgentSessionID()
+		}
+		tspec, err := a.buildSpec(ag, wtPath, branch, agentSessionID, false)
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
 		id := session.NewID()
 		prog := a.prog
-		h, err := termpane.Start(ctx, termpane.Spec{
-			Command: spec.Command, Env: spec.Env, Cwd: spec.Cwd,
-			Cols: 80, Rows: 24,
-			OnDirty: func() {
-				if prog != nil {
-					prog.Send(termpane.RefreshMsg{ID: id})
-				}
-			},
-		})
+		tspec.OnDirty = func() {
+			if prog != nil {
+				prog.Send(termpane.RefreshMsg{ID: id})
+			}
+		}
+		h, err := termpane.Start(ctx, tspec)
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
 		m := termpane.NewModel(id, h)
 		s := &session.Session{
-			ID: id, AgentID: ag.ID, RepoRoot: repo, WorktreePath: wtPath,
+			ID: id, AgentID: ag.ID, AgentSessionID: agentSessionID,
+			RepoRoot: repo, WorktreePath: wtPath,
 			Branch: branch, PID: h.PID(), Status: session.StatusRunning,
 			StartedAt: time.Now(), LastActivity: time.Now(),
 		}
@@ -509,31 +725,88 @@ func (a *App) attachAgent(wtPath, branch string) tea.Cmd {
 	repo := a.repoRoot
 	return func() tea.Msg {
 		ctx := context.Background()
-		spec, err := agent.Resolve(ag, agent.TemplateVars{WorktreePath: wtPath, Branch: branch, RepoRoot: repo})
+		agentSessionID := ""
+		if ag.ID == "claude" {
+			agentSessionID = session.NewAgentSessionID()
+		}
+		tspec, err := a.buildSpec(ag, wtPath, branch, agentSessionID, false)
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
 		id := session.NewID()
 		prog := a.prog
-		h, err := termpane.Start(ctx, termpane.Spec{
-			Command: spec.Command, Env: spec.Env, Cwd: spec.Cwd,
-			Cols: 80, Rows: 24,
-			OnDirty: func() {
-				if prog != nil {
-					prog.Send(termpane.RefreshMsg{ID: id})
-				}
-			},
-		})
+		tspec.OnDirty = func() {
+			if prog != nil {
+				prog.Send(termpane.RefreshMsg{ID: id})
+			}
+		}
+		h, err := termpane.Start(ctx, tspec)
 		if err != nil {
 			return sessionCreatedMsg{err: err}
 		}
 		m := termpane.NewModel(id, h)
 		s := &session.Session{
-			ID: id, AgentID: ag.ID, RepoRoot: repo, WorktreePath: wtPath,
+			ID: id, AgentID: ag.ID, AgentSessionID: agentSessionID,
+			RepoRoot: repo, WorktreePath: wtPath,
 			Branch: branch, PID: h.PID(), Status: session.StatusRunning,
 			StartedAt: time.Now(), LastActivity: time.Now(),
 		}
 		return sessionCreatedMsg{s: s, m: m}
+	}
+}
+
+// resumeSession re-spawns an exited session's agent. For claude with a
+// stored AgentSessionID, this runs `claude --resume <uuid>` so the prior
+// conversation continues. The refreshed session re-uses the original grove
+// ID so it replaces the existing entry (via Add's map overwrite) instead
+// of adding a duplicate row to the list.
+func (a *App) resumeSession(s *session.Session) tea.Cmd {
+	if s == nil {
+		return nil
+	}
+	if s.Status == session.StatusRunning && a.terms[s.ID] != nil {
+		a.tab = tabTerm
+		a.focus = focusActive
+		return nil
+	}
+	ag, ok := a.findAgent(s.AgentID)
+	if !ok {
+		a.status = "unknown agent: " + s.AgentID
+		return nil
+	}
+	snap := *s
+	return func() tea.Msg {
+		ctx := context.Background()
+		agentSessionID := snap.AgentSessionID
+		resume := true
+		// Legacy sessions from before AgentSessionID existed — start a fresh
+		// claude conversation rather than fail.
+		if ag.ID == "claude" && agentSessionID == "" {
+			agentSessionID = session.NewAgentSessionID()
+			resume = false
+		}
+		tspec, err := a.buildSpec(ag, snap.WorktreePath, snap.Branch, agentSessionID, resume)
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		id := snap.ID
+		prog := a.prog
+		tspec.OnDirty = func() {
+			if prog != nil {
+				prog.Send(termpane.RefreshMsg{ID: id})
+			}
+		}
+		h, err := termpane.Start(ctx, tspec)
+		if err != nil {
+			return sessionCreatedMsg{err: err}
+		}
+		m := termpane.NewModel(id, h)
+		newS := snap
+		newS.AgentSessionID = agentSessionID
+		newS.PID = h.PID()
+		newS.Status = session.StatusRunning
+		newS.LastActivity = time.Now()
+		return sessionCreatedMsg{s: &newS, m: m}
 	}
 }
 
@@ -566,10 +839,7 @@ func (a *App) syncActive() {
 }
 
 func (a *App) relayout() {
-	listW := 28
-	if a.w < 90 {
-		listW = a.w / 3
-	}
+	listW := a.sessionsW()
 	bodyH := a.h - 4 // top header + tab bar + status bar + dialog area
 	if bodyH < 5 {
 		bodyH = a.h - 2
@@ -621,15 +891,13 @@ func (a *App) render() string {
 		return "initializing…"
 	}
 	header := styleHeader.Render("grove") + "  " + styleHint.Render(filepath.Base(a.repoRoot))
+	a.list.SetFocused(a.focus == focusSessions)
 	list := a.list.View()
 	body := a.renderBody()
 	hint := styleHint.Render(a.hintText())
 	status := styleStatus.Render(a.status)
 
-	listW := 28
-	if a.w < 90 {
-		listW = a.w / 3
-	}
+	listW := a.sessionsW()
 	rightW := a.w - listW - 1
 
 	// In split mode, show column headers instead of a tab bar (which is
@@ -682,10 +950,11 @@ func (a *App) renderTabs() string {
 		t    tab
 		text string
 	}{{tabTerm, "Terminal"}, {tabDiff, "Diff"}, {tabLog, "Log"}}
+	prefix := focusPrefix(a.focus == focusActive)
 	var parts []string
 	for _, l := range labels {
 		if l.t == a.tab {
-			parts = append(parts, styleTabOn.Render(l.text))
+			parts = append(parts, styleTabOn.Render(prefix+l.text))
 		} else {
 			parts = append(parts, styleTabOff.Render(l.text))
 		}
@@ -712,11 +981,19 @@ func (a *App) renderBody() string {
 }
 
 func (a *App) renderSplitHeaders() string {
-	label := lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
-	left := lipgloss.NewStyle().Width(a.termW).Render(label.Render("Terminal"))
-	right := lipgloss.NewStyle().Width(a.diffW).Render(label.Render("Diff"))
-	gap := " "
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, gap, right)
+	labelActive := lipgloss.NewStyle().Foreground(lipgloss.Color("11")).Bold(true)
+	labelDim := lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
+	termFocused := a.focus == focusActive && a.tab == tabTerm
+	diffFocused := a.focus == focusActive && a.tab == tabDiff
+	pick := func(focused bool) lipgloss.Style {
+		if focused {
+			return labelActive
+		}
+		return labelDim
+	}
+	left := lipgloss.NewStyle().Width(a.termW).Render(pick(termFocused).Render(focusPrefix(termFocused) + "Terminal"))
+	right := lipgloss.NewStyle().Width(a.diffW).Render(pick(diffFocused).Render(focusPrefix(diffFocused) + "Diff"))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, " ", right)
 }
 
 func (a *App) renderSplitBody() string {
