@@ -86,7 +86,8 @@ func (m *Model) loadDiff(sha string) tea.Cmd {
 		if err != nil {
 			return DiffLoadedMsg{err: err}
 		}
-		return DiffLoadedMsg{content: diffpane.Render(files)}
+		content, _ := diffpane.Render(files)
+		return DiffLoadedMsg{content: content}
 	}
 }
 

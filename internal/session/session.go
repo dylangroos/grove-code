@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/dylangroos/grove-code/internal/config"
@@ -24,15 +25,16 @@ const (
 
 // Session is the in-memory + persisted representation of one agent run.
 type Session struct {
-	ID           string    `json:"id"`
-	AgentID      string    `json:"agent_id"`
-	RepoRoot     string    `json:"repo_root"`
-	WorktreePath string    `json:"worktree_path"`
-	Branch       string    `json:"branch"`
-	PID          int       `json:"pid"`
-	Status       Status    `json:"status"`
-	StartedAt    time.Time `json:"started_at"`
-	LastActivity time.Time `json:"last_activity"`
+	ID             string    `json:"id"`
+	AgentID        string    `json:"agent_id"`
+	AgentSessionID string    `json:"agent_session_id,omitempty"` // agent-owned UUID (e.g. claude --session-id); empty for agents without a resume model
+	RepoRoot       string    `json:"repo_root"`
+	WorktreePath   string    `json:"worktree_path"`
+	Branch         string    `json:"branch"`
+	PID            int       `json:"pid"`
+	Status         Status    `json:"status"`
+	StartedAt      time.Time `json:"started_at"`
+	LastActivity   time.Time `json:"last_activity"`
 }
 
 type Registry struct {
@@ -79,6 +81,17 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+// NewAgentSessionID returns a random RFC 4122 v4 UUID. Claude's --session-id
+// flag rejects anything that isn't a valid v4 UUID.
+func NewAgentSessionID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant RFC 4122
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 type persisted struct {
 	Version  int        `json:"version"`
 	Sessions []*Session `json:"sessions"`
@@ -107,8 +120,11 @@ func (r *Registry) Save() error {
 	return os.Rename(tmp, path)
 }
 
-// Load reads state.json and returns a registry. Sessions whose PID is no longer
-// live are dropped (v0.1 does not reattach — that comes with the v0.2 daemon).
+// Load reads state.json and returns a registry. All persisted sessions are
+// kept (including exited ones) so the user can resume them from history.
+// Any process surviving from a prior grove is terminated — a fresh grove
+// can't share a PTY with it, and concurrent claude writers to the same
+// JSONL corrupt the transcript.
 func Load() (*Registry, error) {
 	r := NewRegistry()
 	data, err := os.ReadFile(config.StateFile())
@@ -123,13 +139,10 @@ func Load() (*Registry, error) {
 		return nil, fmt.Errorf("parse state.json: %w", err)
 	}
 	for _, s := range p.Sessions {
-		if s.Status == StatusRunning && !pidAlive(s.PID) {
-			s.Status = StatusExited
+		if s.Status == StatusRunning && pidAlive(s.PID) {
+			_ = killPid(s.PID)
 		}
-		// Drop exited/crashed sessions on load — v0.1 doesn't show history.
-		if s.Status != StatusRunning {
-			continue
-		}
+		s.Status = StatusExited
 		r.sessions[s.ID] = s
 	}
 	return r, nil
@@ -144,6 +157,23 @@ func pidAlive(pid int) bool {
 		return false
 	}
 	return proc.Signal(nil) == nil
+}
+
+// killPid terminates an orphan process: SIGTERM, brief grace period, SIGKILL
+// if it's still alive. Best-effort; failures are swallowed.
+func killPid(pid int) error {
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	_ = proc.Signal(syscall.SIGTERM)
+	for i := 0; i < 10; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if !pidAlive(pid) {
+			return nil
+		}
+	}
+	return proc.Signal(syscall.SIGKILL)
 }
 
 // WorktreePathFor returns the filesystem path for a new session's worktree.
