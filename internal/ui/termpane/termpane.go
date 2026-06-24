@@ -21,6 +21,10 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
+// dirtyCoalesce caps how often pty output triggers a re-render. ~60fps: a
+// streaming agent can no longer flood the Update loop with RefreshMsg.
+const dirtyCoalesce = 16 * time.Millisecond
+
 // Spec is what the caller needs to know to launch a session.
 type Spec struct {
 	Command []string
@@ -84,7 +88,7 @@ func Start(ctx context.Context, spec Spec) (Handle, error) {
 			if spec.OnDirty != nil {
 				spec.OnDirty()
 			}
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(dirtyCoalesce)
 		}
 	}()
 	// Pipe child output → emulator.
