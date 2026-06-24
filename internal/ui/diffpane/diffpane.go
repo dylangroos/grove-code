@@ -26,6 +26,8 @@ var (
 	styleHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
 	styleHunk   = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 	styleGutter = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	// diffStyle is resolved once; styles.Get is a map lookup we don't want per line.
+	diffStyle = styles.Get("monokai")
 )
 
 type Model struct {
@@ -180,8 +182,7 @@ func highlight(line string, lexer chroma.Lexer) string {
 		return line + "\n"
 	}
 	var buf bytes.Buffer
-	style := styles.Get("monokai")
-	if err := formatters.TTY256.Format(&buf, style, it); err != nil {
+	if err := formatters.TTY256.Format(&buf, diffStyle, it); err != nil {
 		return line + "\n"
 	}
 	return buf.String() + "\n"
