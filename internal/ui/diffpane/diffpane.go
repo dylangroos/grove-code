@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"hash/fnv"
 	"path/filepath"
 	"strings"
 
@@ -26,12 +27,15 @@ var (
 	styleHeader = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
 	styleHunk   = lipgloss.NewStyle().Foreground(lipgloss.Color("4"))
 	styleGutter = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	// diffStyle is resolved once; styles.Get is a map lookup we don't want per line.
+	diffStyle = styles.Get("monokai")
 )
 
 type Model struct {
 	vp       viewport.Model
 	repoRoot string
 	content  string
+	lastHash uint64
 	err      error
 	w, h     int
 }
@@ -42,7 +46,10 @@ func New() Model {
 	return Model{vp: vp}
 }
 
-func (m *Model) SetRepoRoot(p string) { m.repoRoot = p }
+func (m *Model) SetRepoRoot(p string) {
+	m.repoRoot = p
+	m.lastHash = 0
+}
 
 func (m *Model) SetSize(w, h int) {
 	m.w, m.h = w, h
@@ -51,13 +58,39 @@ func (m *Model) SetSize(w, h int) {
 }
 
 type LoadedMsg struct {
-	content string
-	err     error
+	content   string
+	err       error
+	hash      uint64
+	unchanged bool
+}
+
+func fnvHash(b []byte) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return h.Sum64()
+}
+
+// decideLoad turns raw `git diff` bytes into a LoadedMsg, skipping the parse +
+// highlight work when the bytes are unchanged from the last render (prevHash).
+func decideLoad(raw []byte, prevHash uint64) LoadedMsg {
+	h := fnvHash(raw)
+	if h == prevHash {
+		return LoadedMsg{unchanged: true}
+	}
+	if len(raw) == 0 {
+		return LoadedMsg{content: "(no uncommitted changes)", hash: h}
+	}
+	files, _, err := gitdiff.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return LoadedMsg{err: err}
+	}
+	return LoadedMsg{content: Render(files), hash: h}
 }
 
 // Refresh runs `git diff HEAD` and updates the viewport.
 func (m *Model) Refresh() tea.Cmd {
 	root := m.repoRoot
+	prevHash := m.lastHash
 	return func() tea.Msg {
 		if root == "" {
 			return LoadedMsg{content: "(no session selected)"}
@@ -67,14 +100,7 @@ func (m *Model) Refresh() tea.Cmd {
 		if err != nil {
 			return LoadedMsg{err: err}
 		}
-		if len(raw) == 0 {
-			return LoadedMsg{content: "(no uncommitted changes)"}
-		}
-		files, _, err := gitdiff.Parse(bytes.NewReader(raw))
-		if err != nil {
-			return LoadedMsg{err: err}
-		}
-		return LoadedMsg{content: Render(files)}
+		return decideLoad(raw, prevHash)
 	}
 }
 
@@ -83,8 +109,12 @@ func (m Model) Init() tea.Cmd { return nil }
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case LoadedMsg:
+		if msg.unchanged {
+			return m, nil
+		}
 		m.err = msg.err
 		m.content = msg.content
+		m.lastHash = msg.hash
 		m.vp.SetContent(m.content)
 		return m, nil
 	}
@@ -180,8 +210,7 @@ func highlight(line string, lexer chroma.Lexer) string {
 		return line + "\n"
 	}
 	var buf bytes.Buffer
-	style := styles.Get("monokai")
-	if err := formatters.TTY256.Format(&buf, style, it); err != nil {
+	if err := formatters.TTY256.Format(&buf, diffStyle, it); err != nil {
 		return line + "\n"
 	}
 	return buf.String() + "\n"
