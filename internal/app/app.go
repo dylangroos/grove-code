@@ -322,6 +322,10 @@ func (a *App) handleNormalKey(k tea.KeyPressMsg) tea.Cmd {
 			a.focus = focusActive
 			return nil
 		}
+	case "left":
+		return a.moveColumn(-1)
+	case "right":
+		return a.moveColumn(+1)
 	case "P":
 		return a.createPR()
 	case "s":
@@ -346,6 +350,49 @@ func (a *App) toggleLayout() {
 		a.layout = layoutSplit
 	}
 	a.relayout()
+}
+
+// moveColumn moves horizontal focus by delta (-1 left, +1 right). Columns are
+// [list, active-pane] in tabbed layout and [list, terminal, diff] in split.
+// Landing on the diff column refreshes it.
+func (a *App) moveColumn(delta int) tea.Cmd {
+	maxIdx := 1
+	if a.layout == layoutSplit {
+		maxIdx = 2
+	}
+
+	// Current column index.
+	idx := 0 // list
+	if a.focus == focusActive {
+		idx = 1 // terminal / active pane
+		if a.layout == layoutSplit && a.tab == tabDiff {
+			idx = 2 // diff
+		}
+	}
+
+	idx += delta
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > maxIdx {
+		idx = maxIdx
+	}
+
+	switch idx {
+	case 0:
+		a.focus = focusSessions
+		return nil
+	case 1:
+		a.focus = focusActive
+		if a.layout == layoutSplit {
+			a.tab = tabTerm
+		}
+		return nil
+	default: // 2, split only
+		a.focus = focusActive
+		a.tab = tabDiff
+		return a.diff.Refresh()
+	}
 }
 
 func (a *App) beginQuit() tea.Cmd {
@@ -680,12 +727,12 @@ func (a *App) hintText() string {
 		}
 		return "[typing → agent]  ctrl+g → grove commands"
 	case a.focus == focusActive:
-		return "j/k scroll  1/2/3 tab  ctrl+g → sessions"
+		return "j/k scroll  ←/→ cols  1/2/3 tab  ctrl+g → sessions"
 	default:
 		if split {
-			return "j/k pick  n new  x kill  s tabbed  3 log  P pr  q quit  ctrl+g → terminal"
+			return "j/k pick  n new  x kill  s tabbed  3 log  P pr  q quit  ←/→ cols  ctrl+g → terminal"
 		}
-		return "j/k pick  n new  x kill  s split  1/2/3 tab  P pr  q quit  ctrl+g → terminal"
+		return "j/k pick  n new  x kill  s split  1/2/3 tab  P pr  q quit  ←/→ cols  ctrl+g → terminal"
 	}
 }
 
