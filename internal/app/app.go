@@ -135,6 +135,7 @@ func (a *App) pollTarget() tab {
 	if a.currentSession() == nil {
 		return tabNone
 	}
+	// Split layout always polls the diff, even when the full-screen Log tab is active.
 	if a.layout == layoutSplit {
 		return tabDiff
 	}

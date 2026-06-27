@@ -32,9 +32,9 @@ type Spec struct {
 	Cwd     string
 	Cols    int
 	Rows    int
-	// OnDirty, if non-nil, is invoked (with ~2ms coalescing) whenever new
-	// bytes land in the emulator. Used to push re-renders to the TUI without
-	// polling.
+	// OnDirty, if non-nil, is invoked (with ~16ms coalescing — see dirtyCoalesce)
+	// whenever new bytes land in the emulator. Used to push re-renders to the TUI
+	// without polling.
 	OnDirty func()
 }
 

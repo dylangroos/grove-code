@@ -59,6 +59,17 @@ func TestPollTarget_TabbedTerminalFocusedSkips(t *testing.T) {
 	}
 }
 
+func TestPollTarget_TabbedLogFocused(t *testing.T) {
+	a := newTestApp()
+	addSelectedSession(a)
+	a.layout = layoutTabbed
+	a.focus = focusActive
+	a.tab = tabLog
+	if got := a.pollTarget(); got != tabLog {
+		t.Fatalf("focused log tab must refresh log, got %d", got)
+	}
+}
+
 func TestMoveColumn_TabbedRightFocusesActiveLeftFocusesList(t *testing.T) {
 	a := newTestApp()
 	a.layout = layoutTabbed
