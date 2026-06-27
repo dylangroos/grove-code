@@ -30,6 +30,8 @@ const (
 	tabLog
 )
 
+const tabNone tab = -1
+
 type focus int
 
 const (
@@ -127,6 +129,21 @@ func (a *App) Init() tea.Cmd {
 // pollMsg: periodic refresh of diff/log while user is looking.
 type pollMsg struct{}
 
+// pollTarget reports which pane the 2s poll tick should refresh, or tabNone.
+// No selected session means nothing to diff, so we skip the git shell-out.
+func (a *App) pollTarget() tab {
+	if a.currentSession() == nil {
+		return tabNone
+	}
+	if a.layout == layoutSplit {
+		return tabDiff
+	}
+	if a.focus == focusActive && (a.tab == tabDiff || a.tab == tabLog) {
+		return a.tab
+	}
+	return tabNone
+}
+
 type statusMsg struct{ text string }
 
 type sessionCreatedMsg struct {
@@ -143,16 +160,11 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 	case pollMsg:
 		cmds := []tea.Cmd{tea.Tick(2*time.Second, func(time.Time) tea.Msg { return pollMsg{} })}
-		// Split view keeps the diff live regardless of focus.
-		if a.layout == layoutSplit {
+		switch a.pollTarget() {
+		case tabDiff:
 			cmds = append(cmds, a.diff.Refresh())
-		} else if a.focus == focusActive {
-			switch a.tab {
-			case tabDiff:
-				cmds = append(cmds, a.diff.Refresh())
-			case tabLog:
-				cmds = append(cmds, a.log.Refresh())
-			}
+		case tabLog:
+			cmds = append(cmds, a.log.Refresh())
 		}
 		return a, tea.Batch(cmds...)
 	case statusMsg:
